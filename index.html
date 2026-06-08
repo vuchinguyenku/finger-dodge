@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Finger Dodge Ultimate Fixed</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  background:radial-gradient(circle at top,#172040,#05070d 70%);
+  color:white;
+  font-family:Arial,sans-serif;
+  overflow:hidden;
+}
+canvas{
+  display:block;
+  margin:28px auto 0;
+  background:#07090f;
+  border:3px solid #58c8ff;
+  box-shadow:0 0 32px #248cff;
+}
+[hidden]{display:none!important}
+.panel{
+  position:fixed;
+  inset:0;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  background:rgba(0,0,0,.82);
+  z-index:10;
+}
+h1{font-size:48px;margin:0 0 20px;text-shadow:0 0 16px #58c8ff}
+button,select{
+  padding:12px 18px;
+  margin:8px;
+  font-size:20px;
+  border-radius:8px;
+  border:0;
+}
+button{cursor:pointer;background:#58c8ff;color:#00121f;font-weight:bold}
+#hud{
+  position:fixed;
+  top:10px;
+  left:10px;
+  z-index:5;
+  font-size:20px;
+  background:rgba(0,0,0,.45);
+  padding:10px 14px;
+  border:1px solid #58c8ff;
+  border-radius:8px;
+}
+table{border-collapse:collapse;background:rgba(255,255,255,.08);margin:8px}
+td,th{border:1px solid #888;padding:6px 14px;text-align:center}
+.small{opacity:.8}
+</style>
+</head>
+<body>
+
+<div id="menu" class="panel">
+  <h1>Finger Dodge Ultimate</h1>
+  <p class="small">Điều khiển: W A S D. Né đạn và laser.</p>
+  <label>Độ khó:
+    <select id="difficulty">
+      <option value="easy">Dễ - 20 giây</option>
+      <option value="normal" selected>Thường - 40 giây</option>
+      <option value="hard">Khó - 60 giây</option>
+    </select>
+  </label>
+  <button id="startBtn">Bắt đầu</button>
+</div>
+
+<div id="hud" hidden>
+  <div>Điểm: <span id="score">0</span></div>
+  <div>Thời gian còn lại: <span id="time">0</span>s</div>
+  <div>Đòn tiếp theo: <span id="nextAttack">0.0</span>s</div>
+</div>
+
+<canvas id="game" width="900" height="600"></canvas>
+
+<div id="gameover" class="panel" hidden>
+  <h1>Kết thúc</h1>
+  <p>Điểm: <span id="finalScore">0</span></p>
+  <h3>Top 5</h3>
+  <table id="leader"></table>
+  <button id="againBtn">Chơi lại</button>
+</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+const menu=document.getElementById("menu");
+const gameover=document.getElementById("gameover");
+const hud=document.getElementById("hud");
+const scoreEl=document.getElementById("score");
+const timeEl=document.getElementById("time");
+const nextAttackEl=document.getElementById("nextAttack");
+const finalScoreEl=document.getElementById("finalScore");
+const leaderEl=document.getElementById("leader");
+const difficultyEl=document.getElementById("difficulty");
+
+let player,bullets,lasers,boss,startTime,duration,score,ended,started;
+let attackCooldown,lastAttack,attackGap,bulletSpeed;
+const keys={};
+
+document.addEventListener("keydown",e=>keys[e.key.toLowerCase()]=true);
+document.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+document.getElementById("startBtn").onclick=startGame;
+document.getElementById("againBtn").onclick=()=>location.reload();
+
+function startGame(){
+  menu.hidden=true;
+  gameover.hidden=true;
+  hud.hidden=false;
+
+  player={x:450,y:500,r:11,speed:6,hp:1};
+  bullets=[];
+  lasers=[];
+  boss={x:450,y:105,r:38,phase:1};
+  score=0;
+  ended=false;
+  started=true;
+  startTime=Date.now();
+  lastAttack=0;
+
+  const diff=difficultyEl.value;
+  if(diff==="easy"){duration=20;attackGap=1200;bulletSpeed=3.2;}
+  if(diff==="normal"){duration=40;attackGap=850;bulletSpeed=4.4;}
+  if(diff==="hard"){duration=60;attackGap=600;bulletSpeed=5.4;}
+
+  requestAnimationFrame(loop);
+}
+
+function rand(min,max){return min+Math.random()*(max-min)}
+
+function addBullet(x,y,vx,vy,r,type,color){
+  bullets.push({x,y,vx,vy,r,type,color});
+}
+
+function attack(){
+  const r=Math.random();
+
+  if(r<0.35) sideBullets();
+  else if(r<0.6) circleBurst();
+  else if(r<0.78) spiralBurst();
+  else laserAttack();
+}
+
+function sideBullets(){
+  for(let i=0;i<5;i++){
+    const side=Math.floor(Math.random()*4);
+    let x,y,vx,vy,s=bulletSpeed+rand(-.5,1.2);
+    if(side===0){x=rand(20,880);y=-20;vx=rand(-.8,.8);vy=s;}
+    if(side===1){x=920;y=rand(20,580);vx=-s;vy=rand(-.8,.8);}
+    if(side===2){x=rand(20,880);y=620;vx=rand(-.8,.8);vy=-s;}
+    if(side===3){x=-20;y=rand(20,580);vx=s;vy=rand(-.8,.8);}
+    addBullet(x,y,vx,vy,7,"round","#ffffff");
+  }
+}
+
+function circleBurst(){
+  const n=22;
+  for(let i=0;i<n;i++){
+    const a=i*Math.PI*2/n;
+    addBullet(boss.x,boss.y,Math.cos(a)*bulletSpeed,Math.sin(a)*bulletSpeed,7,"diamond","#67d8ff");
+  }
+}
+
+function spiralBurst(){
+  const base=performance.now()/350;
+  for(let i=0;i<14;i++){
+    const a=base+i*.45;
+    addBullet(boss.x,boss.y,Math.cos(a)*(bulletSpeed+.6),Math.sin(a)*(bulletSpeed+.6),6,"star","#ffd85a");
+  }
+}
+
+function laserAttack(){
+  const vertical=Math.random()<0.5;
+  if(vertical){
+    lasers.push({x:rand(80,800),y:0,w:26,h:600,t:Date.now(),vertical:true});
+  }else{
+    lasers.push({x:0,y:rand(120,540),w:900,h:26,t:Date.now(),vertical:false});
+  }
+}
+
+function hitCircle(a,b){
+  return Math.hypot(a.x-b.x,a.y-b.y)<a.r+b.r;
+}
+
+function hitRectCircle(rect,cir){
+  const cx=Math.max(rect.x,Math.min(cir.x,rect.x+rect.w));
+  const cy=Math.max(rect.y,Math.min(cir.y,rect.y+rect.h));
+  return Math.hypot(cir.x-cx,cir.y-cy)<cir.r;
+}
+
+function finish(){
+  if(ended) return;
+  ended=true;
+  hud.hidden=true;
+  gameover.hidden=false;
+  finalScoreEl.textContent=score;
+
+  const key="fd_scores_v2_"+difficultyEl.value;
+  let arr=JSON.parse(localStorage.getItem(key)||"[]");
+  arr.push({score:score,date:new Date().toLocaleString("vi-VN")});
+  arr.sort((a,b)=>b.score-a.score);
+  arr=arr.slice(0,5);
+  localStorage.setItem(key,JSON.stringify(arr));
+
+  let t="<tr><th>Hạng</th><th>Điểm</th><th>Thời gian lưu</th></tr>";
+  arr.forEach((row,i)=>t+=`<tr><td>${i+1}</td><td>${row.score}</td><td>${row.date}</td></tr>`);
+  leaderEl.innerHTML=t;
+}
+
+function drawHeart(x,y,s){
+  ctx.save();
+  ctx.translate(x,y);
+  ctx.scale(s,s);
+  ctx.fillStyle="#ff2f5f";
+  ctx.beginPath();
+  ctx.moveTo(0,6);
+  ctx.bezierCurveTo(-18,-8,-8,-20,0,-10);
+  ctx.bezierCurveTo(8,-20,18,-8,0,6);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBullet(b){
+  ctx.save();
+  ctx.translate(b.x,b.y);
+  ctx.fillStyle=b.color;
+  if(b.type==="diamond"){
+    ctx.rotate(Math.PI/4);
+    ctx.fillRect(-b.r,-b.r,b.r*2,b.r*2);
+  }else if(b.type==="star"){
+    ctx.beginPath();
+    for(let i=0;i<10;i++){
+      const rr=i%2===0?b.r:b.r*.45;
+      const a=i*Math.PI/5;
+      ctx.lineTo(Math.cos(a)*rr,Math.sin(a)*rr);
+    }
+    ctx.closePath();
+    ctx.fill();
+  }else{
+    ctx.beginPath();
+    ctx.arc(0,0,b.r,0,Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function loop(){
+  if(!started || ended) return;
+
+  ctx.clearRect(0,0,900,600);
+
+  const now=Date.now();
+  const elapsed=(now-startTime)/1000;
+  const remain=Math.max(0,Math.ceil(duration-elapsed));
+  score=Math.floor(elapsed*10);
+
+  scoreEl.textContent=score;
+  timeEl.textContent=remain;
+  nextAttackEl.textContent=Math.max(0,((attackGap-(now-lastAttack))/1000)).toFixed(1);
+
+  if(now-lastAttack>=attackGap){
+    attack();
+    lastAttack=now;
+  }
+
+  if(keys.w) player.y-=player.speed;
+  if(keys.s) player.y+=player.speed;
+  if(keys.a) player.x-=player.speed;
+  if(keys.d) player.x+=player.speed;
+  player.x=Math.max(16,Math.min(884,player.x));
+  player.y=Math.max(16,Math.min(584,player.y));
+
+  // arena grid
+  ctx.strokeStyle="rgba(88,200,255,.08)";
+  for(let x=0;x<=900;x+=45){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,600);ctx.stroke();}
+  for(let y=0;y<=600;y+=45){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(900,y);ctx.stroke();}
+
+  // boss
+  ctx.fillStyle="#9b2cff";
+  ctx.beginPath();
+  ctx.arc(boss.x,boss.y,boss.r,0,Math.PI*2);
+  ctx.fill();
+  ctx.fillStyle="#fff";
+  ctx.font="18px Arial";
+  ctx.fillText("BOSS",boss.x-24,boss.y+6);
+
+  drawHeart(player.x,player.y,1.05);
+
+  bullets=bullets.filter(b=>b.x>-80&&b.x<980&&b.y>-80&&b.y<680);
+  for(const b of bullets){
+    b.x+=b.vx;
+    b.y+=b.vy;
+    drawBullet(b);
+    if(hitCircle(player,b)) finish();
+  }
+
+  lasers=lasers.filter(l=>now-l.t<1700);
+  for(const l of lasers){
+    const age=now-l.t;
+    if(age<900){
+      ctx.fillStyle="rgba(255,0,0,.25)";
+      ctx.fillRect(l.x,l.y,l.w,l.h);
+      ctx.strokeStyle="#ff5555";
+      ctx.strokeRect(l.x,l.y,l.w,l.h);
+    }else{
+      ctx.fillStyle="#ff1111";
+      ctx.shadowColor="#ff1111";
+      ctx.shadowBlur=20;
+      ctx.fillRect(l.x,l.y,l.w,l.h);
+      ctx.shadowBlur=0;
+      if(hitRectCircle(l,player)) finish();
+    }
+  }
+
+  if(remain<=0) finish();
+  requestAnimationFrame(loop);
+}
+
+ctx.fillStyle="#05070d";
+ctx.fillRect(0,0,900,600);
+</script>
+</body>
+</html>
