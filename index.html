@@ -25,21 +25,59 @@ button{cursor:pointer;background:#58c8ff;color:#00121f;font-weight:bold}
 table{border-collapse:collapse;background:rgba(255,255,255,.08);margin:8px;font-size:14px}
 td,th{border:1px solid #888;padding:6px 10px;text-align:center}
 .small{opacity:.85}
+
+#joystick{
+  position:fixed;
+  right:calc(18px + env(safe-area-inset-right));
+  bottom:calc(18px + env(safe-area-inset-bottom));
+  width:116px;height:116px;border-radius:50%;
+  background:rgba(255,255,255,.10);
+  border:2px solid rgba(255,255,255,.35);
+  z-index:6;display:none;touch-action:none;
+}
+#stick{
+  position:absolute;left:38px;top:38px;
+  width:40px;height:40px;border-radius:50%;
+  background:rgba(88,200,255,.75);
+  box-shadow:0 0 14px #58c8ff;
+}
+@media (hover:none) and (pointer:coarse){
+  #joystick{display:block}
+}
+
+
+.difficulty-options{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  margin:10px 0;
+  font-size:20px;
+}
+.difficulty-options label{
+  padding:10px 16px;
+  border:1px solid rgba(88,200,255,.55);
+  border-radius:10px;
+  background:rgba(255,255,255,.08);
+}
+.difficulty-options input{
+  transform:scale(1.25);
+  margin-right:8px;
+}
+
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="game" width="900" height="600"></canvas></div>
+<div id="joystick"><div id="stick"></div></div>
 
 <div id="menu" class="panel">
   <h1>Finger Dodge Ultimate</h1>
-  <p class="small">Máy tính: W A S D. Điện thoại: kéo ngón tay trên màn hình.</p>
-  <label>Độ khó:
-    <select id="difficulty">
-      <option value="easy">Dễ - 20 giây</option>
-      <option value="normal" selected>Thường - 40 giây</option>
-      <option value="hard">Khó - 60 giây</option>
-    </select>
-  </label>
+  <p class="small">Máy tính: W A S D. Điện thoại: kéo trực tiếp hoặc dùng nút joystick bên phải.</p>
+  <div class="difficulty-options">
+    <label><input type="radio" name="difficulty" value="easy"> Dễ - 20 giây</label>
+    <label><input type="radio" name="difficulty" value="normal" checked> Thường - 40 giây</label>
+    <label><input type="radio" name="difficulty" value="hard"> Khó - 60 giây</label>
+  </div>
   <button id="startBtn">Bắt đầu</button>
 </div>
 
@@ -76,11 +114,12 @@ const hpFill=document.getElementById("hpFill");
 const shieldText=document.getElementById("shieldText");
 const finalScoreEl=document.getElementById("finalScore");
 const leaderEl=document.getElementById("leader");
-const difficultyEl=document.getElementById("difficulty");
+function getDifficulty(){return document.querySelector('input[name="difficulty"]:checked').value;}
 
 let player,bullets,lasers,items,dash,boss,startTime,duration,score,ended,started;
-let lastAttack,lastItem,attackGap,bulletSpeed,difficulty,audioCtx,shake=0,sonicRings=[];
+let lastAttack,lastItem,lastDash,attackGap,bulletSpeed,difficulty,audioCtx,shake=0,sonicRings=[];
 const keys={};
+const joy={active:false,dx:0,dy:0};
 
 function resizeCanvasCSS(){
   const vw=window.innerWidth, vh=window.innerHeight;
@@ -108,11 +147,47 @@ canvas.addEventListener("pointerup",e=>e.preventDefault());
 document.addEventListener("touchmove",e=>e.preventDefault(),{passive:false});
 document.addEventListener("keydown",e=>keys[e.key.toLowerCase()]=true);
 document.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+
+const joystick=document.getElementById("joystick");
+const stick=document.getElementById("stick");
+
+function updateJoystick(clientX,clientY){
+  const rect=joystick.getBoundingClientRect();
+  const cx=rect.left+rect.width/2;
+  const cy=rect.top+rect.height/2;
+  let dx=clientX-cx, dy=clientY-cy;
+  const max=38;
+  const len=Math.hypot(dx,dy);
+  if(len>max){dx=dx/len*max;dy=dy/len*max;}
+  joy.dx=dx/max;
+  joy.dy=dy/max;
+  stick.style.left=(38+dx)+"px";
+  stick.style.top=(38+dy)+"px";
+}
+joystick.addEventListener("pointerdown",e=>{
+  e.preventDefault();
+  joystick.setPointerCapture(e.pointerId);
+  joy.active=true;
+  updateJoystick(e.clientX,e.clientY);
+});
+joystick.addEventListener("pointermove",e=>{
+  if(!joy.active) return;
+  e.preventDefault();
+  updateJoystick(e.clientX,e.clientY);
+});
+function resetJoystick(){
+  joy.active=false;joy.dx=0;joy.dy=0;
+  stick.style.left="38px";stick.style.top="38px";
+}
+joystick.addEventListener("pointerup",resetJoystick);
+joystick.addEventListener("pointercancel",resetJoystick);
+
 document.getElementById("startBtn").onclick=startGame;
 document.getElementById("againBtn").onclick=()=>location.reload();
 
-function sound(freq=440,dur=.08,type="sine",vol=.12){
+function sound(freq=440,dur=.08,type="sine",vol=.18){
   if(!audioCtx) return;
+  if(audioCtx.state==="suspended") audioCtx.resume();
   const o=audioCtx.createOscillator(), g=audioCtx.createGain();
   o.type=type;o.frequency.value=freq;g.gain.value=vol;
   o.connect(g);g.connect(audioCtx.destination);
@@ -120,8 +195,9 @@ function sound(freq=440,dur=.08,type="sine",vol=.12){
   g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+dur);
   o.stop(audioCtx.currentTime+dur);
 }
-function noise(dur=.15,vol=.11){
+function noise(dur=.15,vol=.16){
   if(!audioCtx) return;
+  if(audioCtx.state==="suspended") audioCtx.resume();
   const buffer=audioCtx.createBuffer(1,audioCtx.sampleRate*dur,audioCtx.sampleRate);
   const data=buffer.getChannelData(0);
   for(let i=0;i<data.length;i++) data[i]=Math.random()*2-1;
@@ -131,21 +207,31 @@ function noise(dur=.15,vol=.11){
   src.start();g.gain.exponentialRampToValueAtTime(.001,audioCtx.currentTime+dur);
 }
 
+
+function unlockAudio(){
+  if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state==="suspended") audioCtx.resume();
+  sound(880,.04,"sine",.08);
+}
+document.addEventListener("pointerdown",unlockAudio,{once:true});
+document.addEventListener("touchstart",unlockAudio,{once:true,passive:true});
+
 function startGame(){
-  audioCtx=new (window.AudioContext||window.webkitAudioContext)();
-  sound(660,.12,"square",.16);
+  if(!audioCtx) audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  if(audioCtx.state==="suspended") audioCtx.resume();
+  sound(660,.12,"square",.18);
   menu.hidden=true;gameover.hidden=true;hud.hidden=false;
 
-  difficulty=difficultyEl.value;
+  difficulty=getDifficulty();
   player={x:GAME_W/2,y:GAME_H-100,r:9,speed:6,hp:64,shield:0,shieldEnd:0,invUntil:0};
   bullets=[];lasers=[];items=[];dash=null;sonicRings=[];
   boss={x:GAME_W/2,y:105,r:38};
   score=0;ended=false;started=true;
-  startTime=Date.now();lastAttack=0;lastItem=Date.now();
+  startTime=Date.now();lastAttack=0;lastItem=Date.now();lastDash=Date.now()-7000;
 
-  if(difficulty==="easy"){duration=20;attackGap=1150;bulletSpeed=3.4;}
-  if(difficulty==="normal"){duration=40;attackGap=650;bulletSpeed=5.4;}
-  if(difficulty==="hard"){duration=60;attackGap=430;bulletSpeed=6.8;}
+  if(difficulty==="easy"){duration=20;attackGap=1250;bulletSpeed=3.0;}
+  if(difficulty==="normal"){duration=40;attackGap=900;bulletSpeed=4.0;}
+  if(difficulty==="hard"){duration=60;attackGap=650;bulletSpeed=4.8;}
 
   requestAnimationFrame(loop);
 }
@@ -155,12 +241,15 @@ function addBullet(x,y,vx,vy,r,type,color){bullets.push({x,y,vx,vy,r,type,color,
 
 function attack(){
   if(dash) return;
-  const canDash=difficulty!=="easy";
+  const canDash=difficulty!=="easy" && Date.now()-lastDash>=10000;
   const r=Math.random();
-  if(canDash && r<0.23) dashAttack();
+  if(canDash && r<0.12){
+    dashAttack();
+    lastDash=Date.now();
+  }
   else if(r<0.58) sideBulletWaves();
-  else if(r<0.75) circleBurst();
-  else if(r<0.88) spiralBurst();
+  else if(r<0.76) circleBurst();
+  else if(r<0.90) spiralBurst();
   else laserAttack();
 }
 
@@ -168,8 +257,8 @@ function sideBulletWaves(){
   sound(350,.06,"triangle",.10);
   const pairs=[["left","right"],["top","right"],["bottom","left"],["top","bottom"],["left","top"],["right","bottom"]];
   const pair=pairs[Math.floor(Math.random()*pairs.length)];
-  const waves=difficulty==="easy"?2:(difficulty==="normal"?4:6);
-  const perWave=difficulty==="hard"?5:4;
+  const waves=difficulty==="easy"?2:(difficulty==="normal"?3:4);
+  const perWave=difficulty==="hard"?3:3;
   for(let w=0;w<waves;w++){
     setTimeout(()=>{
       if(ended || dash) return;
@@ -187,29 +276,29 @@ function spawnFromDir(dir){
   if(dir==="bottom"){x=rand(20,880);y=620;vx=rand(-.65,.65);vy=-s}
   if(dir==="left"){x=-20;y=rand(30,580);vx=s;vy=rand(-.65,.65)}
   const shapes=["blade","triangle","square"];
-  const colors=["#ff9f1c","#ff4d6d","#00f5d4","#c77dff"]; addBullet(x,y,vx,vy,8,shapes[Math.floor(Math.random()*shapes.length)],colors[Math.floor(Math.random()*colors.length)]);
+  const colors=["#ff9f1c","#ff4d6d","#00f5d4","#c77dff"]; addBullet(x,y,vx,vy,5.5,shapes[Math.floor(Math.random()*shapes.length)],colors[Math.floor(Math.random()*colors.length)]);
 }
 function circleBurst(){
   sound(520,.08,"sawtooth",.11);
-  const n=difficulty==="hard"?34:26;
+  const n=difficulty==="hard"?24:20;
   for(let i=0;i<n;i++){
     const a=i*Math.PI*2/n;
-    addBullet(boss.x,boss.y,Math.cos(a)*bulletSpeed,Math.sin(a)*bulletSpeed,7,"diamond","#67d8ff");
+    addBullet(boss.x,boss.y,Math.cos(a)*bulletSpeed,Math.sin(a)*bulletSpeed,5.5,"diamond","#67d8ff");
   }
 }
 function spiralBurst(){
   sound(760,.07,"triangle",.11);
   const base=performance.now()/300;
-  const count=difficulty==="hard"?22:16;
+  const count=difficulty==="hard"?14:11;
   for(let i=0;i<count;i++){
     const a=base+i*.42;
-    addBullet(boss.x,boss.y,Math.cos(a)*(bulletSpeed+.7),Math.sin(a)*(bulletSpeed+.7),7,"blade","#ffd85a");
+    addBullet(boss.x,boss.y,Math.cos(a)*(bulletSpeed+.35),Math.sin(a)*(bulletSpeed+.35),5.5,"blade","#ffd85a");
   }
 }
 function laserAttack(){
   sound(220,.22,"sine",.13);
   const colors=["#ff1133","#00e5ff","#b14cff","#ffee00","#00ff77"];
-  const count=difficulty==="hard"?3:(difficulty==="normal"?2:1);
+  const count=difficulty==="hard"?2:(difficulty==="normal"?1:1);
   for(let i=0;i<count;i++){
     const vertical=Math.random()<0.5, color=colors[Math.floor(Math.random()*colors.length)];
     if(vertical) lasers.push({x:rand(80,800),y:0,w:24,h:GAME_H,t:Date.now()+i*160,hit:false,color});
@@ -263,7 +352,7 @@ function finish(){
   if(ended) return;
   ended=true;hud.hidden=true;gameover.hidden=false;finalScoreEl.textContent=score;
   sound(120,.4,"sawtooth",.16);
-  const key="fd_scores_sonic_"+difficultyEl.value;
+  const key="fd_scores_sonic_"+difficulty;
   let arr=JSON.parse(localStorage.getItem(key)||"[]");
   arr.push({score:score,date:new Date().toLocaleString("vi-VN")});
   arr.sort((a,b)=>b.score-a.score);arr=arr.slice(0,5);
@@ -295,11 +384,11 @@ function drawPlayerStar(x,y){
 function drawBullet(b){
   ctx.save();ctx.translate(b.x,b.y);ctx.rotate(b.rot+=0.12);ctx.fillStyle=b.color;ctx.strokeStyle="#d8f7ff";ctx.lineWidth=2;
   if(b.type==="blade"){
-    ctx.beginPath();ctx.moveTo(0,-12);ctx.lineTo(8,0);ctx.lineTo(0,12);ctx.lineTo(-5,0);ctx.closePath();ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,-9);ctx.lineTo(6,0);ctx.lineTo(0,9);ctx.lineTo(-4,0);ctx.closePath();ctx.fill();ctx.stroke();
   }else if(b.type==="triangle"){
-    ctx.beginPath();ctx.moveTo(0,-12);ctx.lineTo(11,9);ctx.lineTo(-11,9);ctx.closePath();ctx.fill();ctx.stroke();
+    ctx.beginPath();ctx.moveTo(0,-9);ctx.lineTo(8,7);ctx.lineTo(-8,7);ctx.closePath();ctx.fill();ctx.stroke();
   }else if(b.type==="square"){
-    ctx.fillRect(-8,-8,16,16);ctx.strokeRect(-8,-8,16,16);
+    ctx.fillRect(-6,-6,12,12);ctx.strokeRect(-6,-6,12,12);
   }else if(b.type==="diamond"){
     ctx.rotate(Math.PI/4);ctx.fillRect(-b.r,-b.r,b.r*2,b.r*2);
   }else{
@@ -356,7 +445,16 @@ function loop(){
   if(now-lastItem>=15000){spawnItem();lastItem=now}
   if(!dash && now-lastAttack>=attackGap){attack();lastAttack=now}
 
-  if(keys.w) player.y-=player.speed;if(keys.s) player.y+=player.speed;if(keys.a) player.x-=player.speed;if(keys.d) player.x+=player.speed;
+  let mx=0,my=0;
+  if(keys.w) my-=1;
+  if(keys.s) my+=1;
+  if(keys.a) mx-=1;
+  if(keys.d) mx+=1;
+  if(joy.active){mx+=joy.dx*1.15;my+=joy.dy*1.15;}
+  const mlen=Math.hypot(mx,my);
+  if(mlen>1){mx/=mlen;my/=mlen;}
+  player.x+=mx*player.speed;
+  player.y+=my*player.speed;
   player.x=Math.max(12,Math.min(GAME_W-12,player.x));player.y=Math.max(12,Math.min(GAME_H-12,player.y));
 
   ctx.strokeStyle="rgba(88,200,255,.08)";
@@ -391,7 +489,7 @@ function loop(){
   bullets=bullets.filter(b=>b.x>-80&&b.x<980&&b.y>-80&&b.y<680);
   for(let i=bullets.length-1;i>=0;i--){
     const b=bullets[i];b.x+=b.vx;b.y+=b.vy;drawBullet(b);
-    if(hitCircle(player,b)){bullets.splice(i,1);applyDamage(5)}
+    if(hitCircle(player,b)){bullets.splice(i,1);applyDamage(3)}
   }
 
   lasers=lasers.filter(l=>now-l.t<1700);
